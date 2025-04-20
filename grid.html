@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Paint by Numbers</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #111;
+      display: flex;
+      font-family: sans-serif;
+    }
+
+    #palette {
+      width: 160px;
+      background: #222;
+      display: flex;
+      flex-direction: column;
+      padding: 10px;
+      gap: 10px;
+      align-items: center;
+      color: white;
+    }
+
+    .color-swatch {
+      width: 30px;
+      height: 30px;
+      border-radius: 4px;
+      cursor: pointer;
+      border: 2px solid transparent;
+    }
+
+    .color-swatch.selected {
+      border-color: #fff;
+    }
+
+    canvas {
+      flex: 1;
+      display: block;
+      background: #fff;
+    }
+
+    #presetSelector {
+      appearance: none;
+      background: #1f1f1f;
+      color: #fff;
+      border: 2px solid #444;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 14px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+      width: 100%;
+      text-align: center;
+    }
+
+    #presetSelector:hover {
+      background: #2a2a2a;
+      border-color: #666;
+    }
+
+    #progress {
+      color: #ccc;
+      font-size: 13px;
+      margin-top: auto;
+      padding-top: 10px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+<div id="palette">
+  <select id="presetSelector">
+    <option disabled selected>Choose a Palette</option>
+  </select>
+  <div id="progress">0 / 0</div>
+</div>
+<canvas id="gridCanvas"></canvas>
+<script>
+  const canvas = document.getElementById('gridCanvas');
+  const ctx = canvas.getContext('2d');
+  const paletteDiv = document.getElementById('palette');
+  const presetSelector = document.getElementById('presetSelector');
+  const progressDiv = document.getElementById('progress');
+  const GRID_SIZE = 128;
+  let tileSize = 10;
+  let scale = 1;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  let COLORS = [];
+  let selectedColor = null;
+  let numberGrid = null;
+  let tiles = new Array(GRID_SIZE * GRID_SIZE).fill('#ffffff');
+
+  for (let i = 1; i <= 418; i++) {
+    const option = document.createElement('option');
+    option.value = i;
+    option.textContent = i.toString().padStart(3, '0');
+    presetSelector.appendChild(option);
+  }
+
+  function buildPaletteUI() {
+    document.querySelectorAll('.color-swatch').forEach(el => el.remove());
+    COLORS.forEach(color => {
+      const swatch = document.createElement('div');
+      swatch.className = 'color-swatch';
+      swatch.style.backgroundColor = color;
+      swatch.addEventListener('click', () => {
+        selectedColor = color;
+        document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+        swatch.classList.add('selected');
+      });
+      if (color === selectedColor) swatch.classList.add('selected');
+      paletteDiv.insertBefore(swatch, progressDiv);
+    });
+  }
+
+  presetSelector.addEventListener('change', () => {
+    const index = presetSelector.value;
+    const palettePath = `Pokemon Palettes/${index}_colors.txt`;
+    const imagePath = `Pokemon Images/${index}.png`;
+
+    fetch(palettePath)
+      .then(res => res.text())
+      .then(text => {
+        COLORS = text.split('\n').map(line => line.trim()).filter(line => /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(line));
+        selectedColor = COLORS[0];
+        buildPaletteUI();
+
+        const img = new Image();
+        img.src = imagePath;
+        img.onload = () => {
+          drawImageOverlay(img);
+        };
+      });
+  });
+
+  function drawImageOverlay(img) {
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = GRID_SIZE;
+    tempCanvas.height = GRID_SIZE;
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.drawImage(img, 0, 0, GRID_SIZE, GRID_SIZE);
+    const imageData = tempCtx.getImageData(0, 0, GRID_SIZE, GRID_SIZE).data;
+    numberGrid = [];
+
+    for (let y = 0; y < GRID_SIZE; y++) {
+      for (let x = 0; x < GRID_SIZE; x++) {
+        const i = (y * GRID_SIZE + x) * 4;
+        const r = imageData[i];
+        const g = imageData[i + 1];
+        const b = imageData[i + 2];
+        const a = imageData[i + 3];
+
+        const idx = y * GRID_SIZE + x;
+        if (a === 0) {
+          numberGrid[idx] = null;
+        } else {
+          const hex = rgbToHex(r, g, b);
+          const closest = findClosestColor(hex, COLORS);
+          numberGrid[idx] = closest;
+        }
+        tiles[idx] = '#ffffff';
+      }
+    }
+    draw();
+    updateProgress();
+  }
+
+  function rgbToHex(r, g, b) {
+    return '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
+  }
+
+  function findClosestColor(hex, palette) {
+    const rgb = hexToRgb(hex);
+    let closest = 0, minDist = Infinity;
+    palette.forEach((p, i) => {
+      const prgb = hexToRgb(p);
+      const dist = Math.sqrt((rgb.r - prgb.r) ** 2 + (rgb.g - prgb.g) ** 2 + (rgb.b - prgb.b) ** 2);
+      if (dist < minDist) {
+        minDist = dist;
+        closest = i;
+      }
+    });
+    return closest;
+  }
+
+  function hexToRgb(hex) {
+    let h = hex.replace('#', '');
+    if (h.length === 3) h = h.split('').map(c => c + c).join('');
+    const bigint = parseInt(h, 16);
+    return { r: (bigint >> 16) & 255, g: (bigint >> 8) & 255, b: bigint & 255 };
+  }
+
+  function resizeCanvas() {
+    canvas.width = window.innerWidth - paletteDiv.offsetWidth;
+    canvas.height = window.innerHeight;
+  }
+
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+
+  function draw() {
+    ctx.setTransform(scale, 0, 0, scale, offsetX, offsetY);
+    ctx.clearRect(-offsetX / scale, -offsetY / scale, canvas.width / scale, canvas.height / scale);
+    for (let y = 0; y < GRID_SIZE; y++) {
+      for (let x = 0; x < GRID_SIZE; x++) {
+        const idx = y * GRID_SIZE + x;
+        ctx.fillStyle = tiles[idx];
+        ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
+        if (numberGrid && numberGrid[idx] !== null && COLORS[numberGrid[idx]]) {
+          ctx.fillStyle = '#000';
+          ctx.font = `${8 / scale}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(numberGrid[idx] + 1, x * tileSize + tileSize / 2, y * tileSize + tileSize / 2);
+        }
+      }
+    }
+    ctx.beginPath();
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 0.5 / scale;
+    for (let x = 0; x <= GRID_SIZE; x++) {
+      ctx.moveTo(x * tileSize, 0);
+      ctx.lineTo(x * tileSize, GRID_SIZE * tileSize);
+    }
+    for (let y = 0; y <= GRID_SIZE; y++) {
+      ctx.moveTo(0, y * tileSize);
+      ctx.lineTo(GRID_SIZE * tileSize, y * tileSize);
+    }
+    ctx.stroke();
+  }
+
+  function updateProgress() {
+    if (!numberGrid) return;
+    let filled = 0;
+    let total = 0;
+    for (let i = 0; i < numberGrid.length; i++) {
+      if (numberGrid[i] !== null) {
+        total++;
+        if (tiles[i] === COLORS[numberGrid[i]]) filled++;
+      }
+    }
+    progressDiv.textContent = `${filled} / ${total}`;
+  }
+
+  let isDragging = false, didDrag = false, dragStart = { x: 0, y: 0 };
+
+  canvas.addEventListener('mousedown', e => {
+    isDragging = true;
+    didDrag = false;
+    dragStart.x = e.clientX;
+    dragStart.y = e.clientY;
+  });
+
+  canvas.addEventListener('mousemove', e => {
+    if (isDragging) {
+      const dx = e.clientX - dragStart.x;
+      const dy = e.clientY - dragStart.y;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) didDrag = true;
+      offsetX += dx;
+      offsetY += dy;
+      dragStart.x = e.clientX;
+      dragStart.y = e.clientY;
+      draw();
+    }
+  });
+
+  canvas.addEventListener('mouseup', e => {
+    isDragging = false;
+    if (!didDrag) {
+      const canvasX = e.clientX - paletteDiv.offsetWidth;
+      const tx = (canvasX - offsetX) / scale;
+      const ty = (e.clientY - offsetY) / scale;
+      const x = Math.floor(tx / tileSize);
+      const y = Math.floor(ty / tileSize);
+      if (x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE) {
+        const idx = y * GRID_SIZE + x;
+        const correctColorIndex = numberGrid[idx];
+        if (correctColorIndex !== null && COLORS[correctColorIndex] === selectedColor) {
+          tiles[idx] = selectedColor;
+        }
+        draw();
+        updateProgress();
+      }
+    }
+  });
+
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const mouseX = e.clientX - paletteDiv.offsetWidth;
+    const mouseY = e.clientY;
+    const delta = e.deltaY < 0 ? 1.1 : 0.9;
+    const wx = (mouseX - offsetX) / scale;
+    const wy = (mouseY - offsetY) / scale;
+    scale *= delta;
+    offsetX = mouseX - wx * scale;
+    offsetY = mouseY - wy * scale;
+    draw();
+  });
+</script>
+</body>
+</html>
